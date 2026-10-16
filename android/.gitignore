@@ -1,0 +1,12 @@
+# Gradle and Android Studio state, build outputs, the Rust libraries `cargo xtask android` copies in,
+# and anything with a signing key or a local SDK path (never committed).
+.gradle/
+.kotlin/
+build/
+app/build/
+app/src/main/jniLibs/
+local.properties
+*.jks
+*.keystore
+.idea/
+*.iml

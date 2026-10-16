@@ -1,0 +1,32 @@
+[package]
+name = "pdfcraft-android"
+description = "PdfCraft for Android: the egui shell in a NativeActivity (build with `cargo xtask android`)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version = "1.95"
+publish = false
+
+# The workspace lints, except that `unsafe_code` is `deny` rather than `forbid`: an Android app
+# can't exist without exporting `android_main` (`#[unsafe(no_mangle)]`) and borrowing the
+# activity's JNI reference, and `forbid` can't be lifted for those two. They live in `src/ffi.rs`,
+# the only module allowed `unsafe` (approved by the owner, 2026-10-16; docs/android/README.md).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+pdfcraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "persistence", "android-native-activity"] }
+egui = { workspace = true }
+# The same android-activity and jni winit and eframe already use (one copy of each in the tree).
+android-activity = { version = "0.6", features = ["native-activity"] }
+jni = "0.22"
+android_logger = "0.15"
+log = { workspace = true }

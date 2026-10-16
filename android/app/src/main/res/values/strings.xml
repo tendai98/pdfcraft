@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Placeholder name until the owner chooses one; never the ArtCraft brand (AGENTS.md §1.2). -->
+    <string name="app_name">PdfCraft</string>
+</resources>

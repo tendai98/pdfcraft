@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher art (drawable-nodpi/ic_launcher_art.webp, contributor-original; ATTRIBUTION.toml),
+     inset to the 72dp an adaptive icon shows, so every launcher mask crops the same teal edge. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_art"
+    android:inset="18dp" />

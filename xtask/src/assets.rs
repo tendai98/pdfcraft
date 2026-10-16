@@ -322,7 +322,7 @@ pub fn fetch_all(m: &Manifest, dir: &Path, kind: &str) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn fetch_verified(url: &str, path: &Path, sha256: &str) -> Result<()> {
+pub fn fetch_verified(url: &str, path: &Path, sha256: &str) -> Result<()> {
     if std::fs::read(path).is_ok_and(|b| sha256_hex(&b) == sha256) {
         return Ok(());
     }

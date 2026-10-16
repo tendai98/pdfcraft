@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with SHA-256 hashes, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (270)
+## In this repository (274)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -278,6 +278,10 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `crates/sign/tests/data/x509-rsa-sha1.pdf` | One-page PDF with a legacy adbe.x509.rsa_sha1 signature by the RSA test key | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: hand-written PDF objects; signature made with `openssl dgst -sha1 -sign` over its byte ranges (see crates/sign/tests/data/README.md) | Signature validation tests (crates/sign/tests/pdf.rs): the legacy adbe.x509.rsa_sha1 format |
 | `assets/icons/monitor.svg` | Lucide icon "monitor" | Lucide Contributors (portions Cole Bemis, Feather) | ISC | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/monitor.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `crates/ui-egui/src/i18n/sl.tsv` | Slovene interface translation catalog | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources | Slovene UI strings, compiled in by crates/ui-egui/src/i18n/mod.rs |
+| `android/app/src/main/res/drawable-nodpi/ic_launcher_art.webp` | Android launcher icon art (lion) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: supplied by the project owner (2026-10-16) for the Android app, credited to PdfCraft | Android launcher icon, framed by drawable/ic_launcher_foreground.xml |
+| `android/app/src/main/res/drawable/ic_launcher_foreground.xml` | Android launcher icon foreground (inset of the lion art) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: an inset of ic_launcher_art.webp for the adaptive icon | Android adaptive launcher icon foreground |
+| `android/app/src/main/res/drawable/ic_launcher_background.xml` | Android launcher icon background (teal) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: a solid fill matching the lion art's background | Android adaptive launcher icon background |
+| `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml` | Android adaptive launcher icon | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: the adaptive icon combining the foreground and background drawables | Android launcher icon (application icon and round icon) |
 
 ## Compiled in through dependencies (6)
 
