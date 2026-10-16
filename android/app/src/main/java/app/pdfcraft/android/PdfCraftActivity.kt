@@ -348,9 +348,19 @@ class PdfCraftActivity : NativeActivity() {
         }
     }
 
-    /** Overwrite [uri] with [file]: the shell has already validated what it wrote. */
+    /**
+     * Overwrite [uri] with [file]: the shell has already validated what it wrote. "wt" truncates;
+     * some providers refuse it, and only then is plain "w" used (on Android 10 "w" doesn't
+     * truncate, which would leave the old file's tail after a shorter PDF).
+     */
     private fun copyOut(file: File, uri: Uri) {
-        val out: OutputStream = contentResolver.openOutputStream(uri, "wt")
+        val out: OutputStream = try {
+            contentResolver.openOutputStream(uri, "wt")
+        } catch (e: IllegalArgumentException) {
+            null
+        } catch (e: UnsupportedOperationException) {
+            null
+        } ?: contentResolver.openOutputStream(uri, "w")
             ?: throw IllegalStateException("the document couldn't be opened for writing")
         out.use { o -> file.inputStream().use { it.copyTo(o) } }
     }

@@ -6,7 +6,10 @@
 //! `rfd::AsyncFileDialog` returns at once instead, and the app uses the choice on a later frame
 //! ([`PdfCraftApp::process_picked`]); a worker thread waits for it.
 //!
-//! How rfd 0.17 shows the panel (checked against its source):
+//! The panel itself comes from [`PdfCraftApp::host`](crate::PdfCraftApp::host): rfd on the desktop
+//! ([`DesktopHost`](crate::hosts::desktop::DesktopHost)), the Storage Access Framework on Android.
+//!
+//! How rfd 0.17 shows the panel on the desktop (checked against its source):
 //! - macOS: creating the future shows the panel, so it must be created on the main thread. With
 //!   no parent given, rfd uses the app's main (or first) window and opens the panel as a sheet
 //!   on it (`beginSheetModalForWindow`). Without a running app and a window it falls back to the
