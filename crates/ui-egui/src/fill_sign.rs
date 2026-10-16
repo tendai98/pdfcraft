@@ -1071,7 +1071,7 @@ impl crate::PdfCraftApp {
         let epoch = self.dialog_epoch();
         let initials = self.signature_draft.initials;
         let scan = self.signature_draft.scan_mode;
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
+        let dialog = crate::platform_host::Dialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
         #[cfg(not(target_arch = "wasm32"))]
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch
@@ -1105,7 +1105,7 @@ impl crate::PdfCraftApp {
                 (pdfcraft_engine::signature_image::MAX_SIGNATURE_IMAGE_BYTES, pdfcraft_engine::signature_image::SignatureImageError::Size.to_string())
             };
             wasm_bindgen_futures::spawn_local(async move {
-                let bytes = if let Some(file) = dialog.pick_file().await {
+                let bytes = if let Some(file) = dialog.to_rfd().pick_file().await {
                     if file.inner().size() > limit as f64 {
                         Some(Err(too_large))
                     } else {

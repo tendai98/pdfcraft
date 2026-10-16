@@ -589,7 +589,7 @@ impl PdfCraftApp {
                 (SaveTarget::InPlace, Some(p), _) if !is_mail_temp_copy(&p) => p,
                 _ => {
                     let name = if name.to_ascii_lowercase().ends_with(".pdf") { name } else { format!("{name}.pdf") };
-                    let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
+                    let dialog = crate::platform_host::Dialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
                         if app.save_doc_to(id, &dest.to_string_lossy()) {
@@ -673,6 +673,12 @@ impl PdfCraftApp {
         };
         if let Err(e) = write_atomically(dest, &bytes) {
             self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
+            return false;
+        }
+        // Where the path stands for a document elsewhere (Android), the validated file reaches
+        // it now; until it has, the document is not saved.
+        if let Err(e) = self.host.after_write(std::path::Path::new(dest)) {
+            self.notify_fmt("Couldn't save {name}: {e}", &[("name", &short_name(dest)), ("e", &e)]);
             return false;
         }
         // Our own write is not a change on disk to reload (#431).

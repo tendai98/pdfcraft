@@ -81,6 +81,7 @@ pub mod fill_sign;
 pub mod folders_ui;
 pub mod forms_ui;
 mod home;
+pub mod hosts;
 mod icon_data;
 pub mod icons;
 pub mod last_session;
@@ -91,6 +92,7 @@ mod palette;
 mod panels;
 #[cfg(not(target_arch = "wasm32"))]
 mod pickers;
+pub mod platform_host;
 pub mod prepare;
 mod print_ui;
 mod signature_drag;
@@ -602,6 +604,10 @@ pub struct PdfCraftApp {
     pub host_save: Option<HostSaveFn>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
+    /// File pickers, the clipboard and publishing saves: the desktop's own unless the app sets
+    /// another (Android does; see [`platform_host`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub host: std::sync::Arc<dyn platform_host::PlatformHost>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).
     pub close_request: Option<CloseRequest>,
     /// Save to this path instead of asking (tests and automation).
@@ -935,6 +941,8 @@ impl PdfCraftApp {
             os_events: None,
             host_save: None,
             host_dirty: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            host: platform_host::default_host(),
             close_request: None,
             save_override: None,
             props_draft: None,
@@ -1458,7 +1466,7 @@ impl PdfCraftApp {
             (Ok(bytes), false) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.ask_one(
-                    pickers::Ask::Save(rfd::AsyncFileDialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
+                    pickers::Ask::Save(crate::platform_host::Dialog::new().set_file_name(crate::files::attachment_file_name(&att.name))),
                     None,
                     move |app, path| match crate::editing::write_atomically(&path.to_string_lossy(), &bytes) {
                         Ok(()) => app.notify_fmt("Saved {name}", &[("name", &path.display().to_string())]),
@@ -1741,8 +1749,8 @@ impl PdfCraftApp {
 
     /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_picker() -> rfd::AsyncFileDialog {
-        rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
+    fn open_picker() -> platform_host::Dialog {
+        crate::platform_host::Dialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
     }
 
     pub fn open_dialog(&mut self) {
@@ -1750,7 +1758,9 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
+            crate::platform_host::Dialog::new()
+                .add_filter("PDF", &["pdf"])
+                .add_filter(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
             true,
         );
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.

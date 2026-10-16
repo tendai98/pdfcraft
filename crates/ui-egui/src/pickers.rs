@@ -32,6 +32,7 @@ use pdfcraft_engine::DocId;
 
 use crate::PdfCraftApp;
 use crate::files::{FilePurpose, PickTarget};
+use crate::platform_host::{Dialog, PickKind};
 
 /// What the chosen files are for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,16 +43,30 @@ pub enum PickFor {
     Files(FilePurpose),
 }
 
-/// Which native panel to show.
+/// Which native panel to show. The host ([`PdfCraftApp::host`]) turns the [`Dialog`] into one.
 pub(crate) enum Ask {
     /// Choose one existing file.
-    File(rfd::AsyncFileDialog),
+    File(Dialog),
     /// Choose one or more existing files.
-    Files(rfd::AsyncFileDialog),
-    /// Choose a folder.
-    Folder(rfd::AsyncFileDialog),
+    Files(Dialog),
+    /// Choose a folder whose files are read.
+    FolderToRead(Dialog),
+    /// Choose a folder to write files into.
+    Folder(Dialog),
     /// Choose where to save a file.
-    Save(rfd::AsyncFileDialog),
+    Save(Dialog),
+}
+
+impl Ask {
+    fn split(self) -> (PickKind, Dialog) {
+        match self {
+            Ask::File(d) => (PickKind::File, d),
+            Ask::Files(d) => (PickKind::Files, d),
+            Ask::FolderToRead(d) => (PickKind::FolderToRead, d),
+            Ask::Folder(d) => (PickKind::Folder, d),
+            Ask::Save(d) => (PickKind::Save, d),
+        }
+    }
 }
 
 /// What to do with the chosen paths, on a later frame.
@@ -60,6 +75,8 @@ type Then = Box<dyn FnOnce(&mut PdfCraftApp, Vec<PathBuf>) + Send>;
 /// A finished pick, waiting for the next frame.
 struct Picked {
     target: Option<PickTarget>,
+    /// The picker it came from: the host may publish what the follow-up wrote (`after_pick`).
+    kind: PickKind,
     /// The chosen paths; empty when the picker was cancelled.
     paths: Vec<PathBuf>,
     then: Then,
@@ -67,7 +84,7 @@ struct Picked {
 
 impl std::fmt::Debug for Picked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Picked").field("target", &self.target).field("paths", &self.paths).finish_non_exhaustive()
+        f.debug_struct("Picked").field("target", &self.target).field("kind", &self.kind).field("paths", &self.paths).finish_non_exhaustive()
     }
 }
 
@@ -102,15 +119,22 @@ impl Pickers {
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
     /// `pick` must already have shown the picker (rfd starts the panel when the future is
     /// created, on the main thread). Returns false when the worker couldn't start.
-    fn spawn<F>(&self, target: Option<PickTarget>, ctx: Option<egui::Context>, pick: F, then: Then) -> bool
+    fn spawn<F>(&self, target: Option<PickTarget>, kind: PickKind, ctx: Option<egui::Context>, pick: F, then: Then) -> bool
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
-        self.spawn_worker(target, ctx, pick, then).is_some()
+        self.spawn_worker(target, kind, ctx, pick, then).is_some()
     }
 
     /// [`Self::spawn`], returning the worker so tests can wait for it instead of polling.
-    fn spawn_worker<F>(&self, target: Option<PickTarget>, ctx: Option<egui::Context>, pick: F, then: Then) -> Option<std::thread::JoinHandle<()>>
+    fn spawn_worker<F>(
+        &self,
+        target: Option<PickTarget>,
+        kind: PickKind,
+        ctx: Option<egui::Context>,
+        pick: F,
+        then: Then,
+    ) -> Option<std::thread::JoinHandle<()>>
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
@@ -120,7 +144,7 @@ impl Pickers {
             .name("file-picker".into())
             .spawn(move || {
                 let paths = pollster::block_on(pick);
-                done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, paths, then });
+                done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, kind, paths, then });
                 showing.hand_over();
                 if let Some(ctx) = ctx {
                     ctx.request_repaint();
@@ -131,8 +155,8 @@ impl Pickers {
 
     /// Queue a pick that is already known (tests and automation). Like a real pick, it keeps
     /// the flag until the frame uses it.
-    fn deliver(&self, target: Option<PickTarget>, paths: Vec<PathBuf>, then: Then) {
-        self.done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, paths, then });
+    fn deliver(&self, target: Option<PickTarget>, kind: PickKind, paths: Vec<PathBuf>, then: Then) {
+        self.done.lock().unwrap_or_else(PoisonError::into_inner).push(Picked { target, kind, paths, then });
     }
 
     fn take(&self) -> Vec<Picked> {
@@ -143,7 +167,7 @@ impl Pickers {
 impl PdfCraftApp {
     /// Show a native picker for `pick_for` without blocking the frame. The choice is used on a
     /// later frame by [`Self::process_picked`].
-    pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: rfd::AsyncFileDialog, multiple: bool) {
+    pub(crate) fn pick(&mut self, pick_for: PickFor, dialog: Dialog, multiple: bool) {
         // Insert and Replace edit the active document: remember which one.
         let target = match pick_for {
             PickFor::Files(purpose) if purpose.edits_active_document() => self.active_ids().map(|(_, id)| id),
@@ -174,36 +198,14 @@ impl PdfCraftApp {
         }
         let target = self.pick_target(target);
         let then: Then = Box::new(then);
+        let (kind, dialog) = ask.split();
         if let Some(paths) = self.pick_override.clone() {
-            self.pickers.deliver(target, paths.into_iter().map(PathBuf::from).collect(), then);
+            self.pickers.deliver(target, kind, paths.into_iter().map(PathBuf::from).collect(), then);
             return true;
         }
         // On macOS creating the future shows the panel; it must happen here, on the main thread.
-        let ctx = self.ctx.clone();
-        let one = |h: Option<rfd::FileHandle>| h.map(|h| h.path().to_path_buf()).into_iter().collect::<Vec<_>>();
-        let started = match ask {
-            Ask::File(d) => {
-                let pick = d.pick_file();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
-            }
-            Ask::Folder(d) => {
-                let pick = d.pick_folder();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
-            }
-            Ask::Save(d) => {
-                let pick = d.save_file();
-                self.pickers.spawn(target, ctx, async move { one(pick.await) }, then)
-            }
-            Ask::Files(d) => {
-                let pick = d.pick_files();
-                self.pickers.spawn(
-                    target,
-                    ctx,
-                    async move { pick.await.unwrap_or_default().into_iter().map(|h| h.path().to_path_buf()).collect() },
-                    then,
-                )
-            }
-        };
+        let pick = self.host.pick(kind, dialog);
+        let started = self.pickers.spawn(target, kind, self.ctx.clone(), pick, then);
         if !started {
             self.pickers.showing.store(false, Ordering::SeqCst);
             self.notify_tr("Couldn't show the file picker. Please try again.");
@@ -222,7 +224,7 @@ impl PdfCraftApp {
 
     /// Use the picks that finished since the last frame. Called every frame.
     pub(crate) fn process_picked(&mut self) {
-        for Picked { target, paths, then } in self.pickers.take() {
+        for Picked { target, kind, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
             if paths.is_empty() {
@@ -233,11 +235,21 @@ impl PdfCraftApp {
             }
             // Last-resort guard (AGENTS.md §4), as for commands: this work used to run inside
             // the command that asked, and a panic in it must not take the app down.
+            let chosen = paths.clone();
             if let Err(m) = pdfcraft_engine::guard(|| then(self, paths)) {
                 self.notify_fmt("That didn't work: an internal error stopped it ({m}).", &[("m", m.as_str())]);
             }
+            // What the follow-up wrote reaches the chosen documents (Android; a no-op elsewhere).
+            for e in self.host.after_pick(kind, &chosen) {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", &chosen_name(&chosen)), ("e", &e)]);
+            }
         }
     }
+}
+
+/// How a pick is named in a message: the first chosen file's name.
+fn chosen_name(paths: &[PathBuf]) -> String {
+    paths.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -254,7 +266,8 @@ mod tests {
         let mut app = PdfCraftApp::new();
         app.pickers.showing.store(true, Ordering::SeqCst);
         let got = Arc::new(Mutex::new(Vec::new()));
-        let worker = app.pickers.spawn_worker(None, None, async { vec![PathBuf::from("a.pdf")] }, record(&got)).expect("worker starts");
+        let worker =
+            app.pickers.spawn_worker(None, PickKind::File, None, async { vec![PathBuf::from("a.pdf")] }, record(&got)).expect("worker starts");
         // Wait for the worker itself: polling with a deadline was flaky on loaded CI runners.
         assert!(worker.join().is_ok());
         assert!(app.pickers.showing.load(Ordering::SeqCst), "the queued pick still owns the flag");
@@ -271,7 +284,7 @@ mod tests {
             panic!("picker failed")
         }
         let got = Arc::new(Mutex::new(Vec::new()));
-        let worker = pickers.spawn_worker(None, None, async { fail() }, record(&got)).expect("worker starts");
+        let worker = pickers.spawn_worker(None, PickKind::File, None, async { fail() }, record(&got)).expect("worker starts");
         // join returns once the panic has unwound and the drop guard has run.
         assert!(worker.join().is_err());
         assert!(!pickers.showing.load(Ordering::SeqCst));
@@ -282,8 +295,8 @@ mod tests {
     fn the_follow_up_runs_on_a_later_frame_and_not_when_cancelled() {
         let mut app = PdfCraftApp::new();
         let got = Arc::new(Mutex::new(Vec::new()));
-        app.pickers.deliver(None, vec![], record(&got));
-        app.pickers.deliver(None, vec![PathBuf::from("b.pdf")], record(&got));
+        app.pickers.deliver(None, PickKind::File, vec![], record(&got));
+        app.pickers.deliver(None, PickKind::File, vec![PathBuf::from("b.pdf")], record(&got));
         assert!(got.lock().unwrap().is_empty(), "nothing runs until the frame uses the picks");
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("b.pdf")], "a cancelled pick runs nothing");
@@ -296,7 +309,7 @@ mod tests {
         app.pickers.showing.store(true, Ordering::SeqCst);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
-        assert!(!app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
+        assert!(!app.ask(Ask::File(Dialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         app.process_picked();
         assert!(got.lock().unwrap().is_empty());
         assert!(app.pickers.showing.load(Ordering::SeqCst), "the showing picker still owns the flag");
@@ -309,12 +322,12 @@ mod tests {
         app.pick_override = Some(vec!["first.fdf".into()]);
         let got = Arc::new(Mutex::new(Vec::new()));
         let into = got.clone();
-        assert!(app.ask(Ask::Files(rfd::AsyncFileDialog::new()), None, move |app, _| {
+        assert!(app.ask(Ask::Files(Dialog::new()), None, move |app, _| {
             // Merge data: the spreadsheet's save picker, asked from the first pick's closure.
-            assert!(app.ask(Ask::Save(rfd::AsyncFileDialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
+            assert!(app.ask(Ask::Save(Dialog::new()), None, move |_, paths| into.lock().unwrap().extend(paths)));
         }));
         // Another command asks for a picker before the frame uses the first pick: refused.
-        assert!(!app.ask(Ask::File(rfd::AsyncFileDialog::new()), None, |_, _| panic!("must not run")));
+        assert!(!app.ask(Ask::File(Dialog::new()), None, |_, _| panic!("must not run")));
         app.process_picked();
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("first.fdf")], "the chained picker answered");
@@ -324,12 +337,69 @@ mod tests {
     fn a_panicking_follow_up_is_reported_and_the_next_pick_still_runs() {
         let mut app = PdfCraftApp::new();
         let got = Arc::new(Mutex::new(Vec::new()));
-        app.pickers.deliver(None, vec![PathBuf::from("x.pdf")], Box::new(|_, _| panic!("follow-up failed")));
-        app.pickers.deliver(None, vec![PathBuf::from("y.pdf")], record(&got));
+        app.pickers.deliver(None, PickKind::File, vec![PathBuf::from("x.pdf")], Box::new(|_, _| panic!("follow-up failed")));
+        app.pickers.deliver(None, PickKind::File, vec![PathBuf::from("y.pdf")], record(&got));
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("y.pdf")]);
         let toast = app.toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
         assert!(toast.contains("internal error"), "the user is told: {toast:?}");
         assert!(!app.pickers.showing.load(Ordering::SeqCst));
+    }
+
+    /// Records what the shell asks of it after a pick, and fails publishing when told to.
+    #[derive(Default)]
+    struct Recording {
+        after_pick: Mutex<Vec<(PickKind, Vec<PathBuf>)>>,
+        fail: bool,
+    }
+
+    impl crate::platform_host::PlatformHost for Recording {
+        fn pick(&self, _kind: PickKind, _dialog: Dialog) -> crate::platform_host::PickFuture {
+            Box::pin(async { Vec::new() })
+        }
+        fn after_pick(&self, kind: PickKind, paths: &[PathBuf]) -> Vec<String> {
+            self.after_pick.lock().unwrap().push((kind, paths.to_vec()));
+            if self.fail { vec!["the folder refused it".into()] } else { Vec::new() }
+        }
+        fn clipboard_text(&self) -> Option<String> {
+            None
+        }
+        fn clipboard_image(&self) -> Option<(usize, usize, Vec<u8>)> {
+            None
+        }
+        fn set_clipboard_image(&self, _: usize, _: usize, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_clipboard_files(&self, _: &[PathBuf]) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_host_publishes_after_the_follow_up_with_the_picks_kind_and_paths() {
+        let mut app = PdfCraftApp::new();
+        let host = Arc::new(Recording::default());
+        app.host = host.clone();
+        app.pick_override = Some(vec!["/out/a.pdf".into()]);
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = ran.clone();
+        assert!(app.ask(Ask::Save(Dialog::new()), None, move |_, _| {
+            r.store(true, Ordering::SeqCst);
+        }));
+        assert!(host.after_pick.lock().unwrap().is_empty(), "nothing is published before the frame uses the pick");
+        app.process_picked();
+        assert!(ran.load(Ordering::SeqCst));
+        assert_eq!(*host.after_pick.lock().unwrap(), vec![(PickKind::Save, vec![PathBuf::from("/out/a.pdf")])]);
+    }
+
+    #[test]
+    fn a_publish_failure_after_a_pick_is_reported() {
+        let mut app = PdfCraftApp::new();
+        app.host = Arc::new(Recording { fail: true, ..Default::default() });
+        app.pick_override = Some(vec!["/out/parts".into()]);
+        assert!(app.ask(Ask::Folder(Dialog::new()), None, |_, _| {}));
+        app.process_picked();
+        let toast = app.toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(toast.contains("refused"), "the user is told: {toast:?}");
     }
 }

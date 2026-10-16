@@ -185,8 +185,8 @@ impl PdfCraftApp {
     pub fn pin_folder_dialog(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dialog = rfd::AsyncFileDialog::new().set_title(tl!("Pin a folder to Home").to_string());
-            self.ask_one(crate::pickers::Ask::Folder(dialog), None, |app, dir| {
+            let dialog = crate::platform_host::Dialog::new().set_title(tl!("Pin a folder to Home").to_string());
+            self.ask_one(crate::pickers::Ask::FolderToRead(dialog), None, |app, dir| {
                 app.pin_folder(&dir.to_string_lossy());
             });
         }

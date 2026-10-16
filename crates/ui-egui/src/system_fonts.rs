@@ -104,6 +104,15 @@ fn devanagari_candidates() -> Vec<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .collect()
+    } else if cfg!(target_os = "android") {
+        android_fonts(&[
+            "NotoSansDevanagariUI-VF.ttf",
+            "NotoSansDevanagari-VF.ttf",
+            "NotoSansDevanagariUI-Regular.otf",
+            "NotoSansDevanagari-Regular.otf",
+            "NotoSansDevanagariUI-Regular.ttf",
+            "NotoSansDevanagari-Regular.ttf",
+        ])
     } else {
         unix_fonts(&[
             "google-noto/NotoSansDevanagariUI-Regular.ttf",
@@ -138,6 +147,8 @@ fn telugu_candidates() -> Vec<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .collect()
+    } else if cfg!(target_os = "android") {
+        android_fonts(&["NotoSansTeluguUI-VF.ttf", "NotoSansTelugu-VF.ttf", "NotoSansTeluguUI-Regular.ttf", "NotoSansTelugu-Regular.ttf"])
     } else {
         unix_fonts(&[
             "google-noto/NotoSansTeluguUI-Regular.ttf",
@@ -171,6 +182,8 @@ fn other_candidates() -> Vec<PathBuf> {
             .iter()
             .map(PathBuf::from)
             .collect()
+    } else if cfg!(target_os = "android") {
+        android_fonts(&["NotoNaskhArabicUI-Regular.ttf", "NotoNaskhArabic-Regular.ttf", "NotoSansArabic-Regular.ttf", "Roboto-Regular.ttf"])
     } else {
         unix_fonts(&[
             "truetype/noto/NotoSansArabic-Regular.ttf",
@@ -199,6 +212,10 @@ fn han_candidates(traditional: bool) -> Vec<PathBuf> {
             &["PingFang.ttc", "Hiragino Sans GB.ttc", "STHeiti Light.ttc", "STHeiti Medium.ttc"]
         };
         files.iter().map(|f| Path::new("/System/Library/Fonts").join(f)).collect()
+    } else if cfg!(target_os = "android") {
+        // Android's own CJK face is Noto CJK, which is left out (above); older releases ship
+        // Droid Sans Fallback.
+        android_fonts(&["DroidSansFallbackFull.ttf", "DroidSansFallback.ttf"])
     } else {
         unix_fonts(&[
             "truetype/wqy/wqy-microhei.ttc",
@@ -223,6 +240,11 @@ fn windows_fonts() -> PathBuf {
 
 fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
     ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect()
+}
+
+/// Android keeps every system face in one folder.
+fn android_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
+    files.iter().map(|f| Path::new("/system/fonts").join(f)).collect()
 }
 
 fn read(path: &Path, probe: char, max: u64) -> Option<Arc<FontData>> {
