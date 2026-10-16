@@ -372,6 +372,7 @@ build machine). Record the device, Android version and renderer in [devices.md](
 | "This document can't be saved back to where it came from" | The source gave no write access; use Save As. |
 | "This document is no longer linked to a file" | The app restarted since it was opened (crash recovery, Recent files); use Save As. |
 | Chinese UI text shows boxes | No allowed CJK face on the device; build with craft-fonts or use another language. |
+| The desktop UI tests (`cargo test -p pdfcraft-ui-egui`) segfault now and then, with `vkEnumerateInstanceExtensionProperties` / `libvulkan.so.1` and a null frame in the crashing thread's backtrace | The machine's Vulkan loader lists a GPU driver that can't load (here an NVIDIA ICD with a driver/library version mismatch), and parallel wgpu instance creation in the tests hits a null entry point. Not a PdfCraft bug: run the tests with `VK_ICD_FILENAMES=/dev/null` (wgpu then uses GL or software), or fix the driver install. |
 | `cargo ndk` can't find a linker | `ANDROID_NDK_HOME` points at an old or broken NDK; use r27+. |
 | Gradle: "SDK location not found" | `ANDROID_HOME` isn't set for the Gradle step (`cargo xtask android` passes it on). |
 
@@ -419,6 +420,9 @@ or accepting it. Nothing else has been measured yet; that needs a device.
 
 ## Revision history
 
+- 2026-10-16: Troubleshooting: UI-test segfaults from a broken Vulkan driver install. The commit
+  before this one (213b837) blamed `vello_cpu`; that came from reading the wrong thread's
+  backtrace, and is corrected here.
 - 2026-10-16: First version (Phases 0–2): build, architecture, SAF staging, bridge protocol,
   storage, unsafe audit, device checklist, decisions. The launcher icon became the owner's lion
   art. `copyOut` falls back from `"wt"` to `"w"` only where a provider refuses truncation.
