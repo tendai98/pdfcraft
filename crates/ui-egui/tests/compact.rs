@@ -94,4 +94,12 @@ fn the_shell_keeps_clear_of_the_status_bar_and_the_navigation_buttons() {
         let rect = h.get_by_label(mode).rect();
         assert!(rect.bottom() <= height - bottom + 0.5, "{mode} ends above the navigation buttons: {rect:?}");
     }
+    // The strips behind the system bars are the bars' colour (the light theme here), not the
+    // near-black that shows where nothing is painted, so the system's dark icons stay readable.
+    let image = h.render().unwrap();
+    let scale = image.height() as f32 / height;
+    for y in [top * 0.5, height - bottom * 0.5] {
+        let px = image.get_pixel(image.width() / 2, (y * scale) as u32);
+        assert!(px[0] > 200 && px[1] > 200 && px[2] > 200, "the strip at y={y} is painted: {px:?}");
+    }
 }

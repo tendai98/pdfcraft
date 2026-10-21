@@ -111,9 +111,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // The docking workspace isn't drawn here, so nothing else takes its reveal requests.
     app.pending_panel_reveals.clear();
-    // Behind the status and navigation bars (outside the safe area), in the bars' colour.
+    // Behind the status and navigation bars (outside the safe area), in the bars' colour. A layer
+    // painter clips to the safe area, so this one is given the whole screen.
     let ctx = ui.ctx().clone();
-    ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.viewport_rect(), 0.0, t.chrome);
+    let mut behind = ctx.layer_painter(egui::LayerId::background());
+    behind.set_clip_rect(ctx.viewport_rect());
+    behind.rect_filled(ctx.viewport_rect(), 0.0, t.chrome);
     ui.style_mut().interaction.resize_grab_radius_side = SHEET_GRAB;
 
     fit_width_once(app, &ctx);
