@@ -334,9 +334,9 @@ There's no screen-reader support yet.
 | Save, Save As, exports | implemented ([above](#files-and-the-storage-access-framework)) |
 | Comments, forms, signing, redaction, OCR… | the shell's own code; not checked on Android, and OCR speed unmeasured |
 | Dark mode, clipboard text, soft keyboard | implemented |
-| Phone layout ([below](#phone-layout)) | implemented (2026-10-21), checked in phone-sized headless renders; on a device: first APK built, not yet reported back |
+| Phone layout ([below](#phone-layout)) | implemented (2026-10-21); runs on the owner's phone (devices.md) |
 | Back button | closes the top dialog, menu or sheet, then goes from a document to Home, then puts the app in the background ([below](#phone-layout)) |
-| Edge to edge: status bar, navigation bar, cutout, soft keyboard | the shell keeps clear of them through egui's safe area (`insets` events); unverified on a device |
+| Edge to edge: status bar, navigation bar, cutout, soft keyboard | status and navigation bars confirmed clear, with readable icons, on the owner's phone; cutout and soft keyboard not yet checked |
 | Pinch zoom | egui's multi-touch zoom feeds the page view's existing zoom; unverified on a device |
 | 44 dp touch targets everywhere, long-press menus, tablet layout | **not yet** (Phase 4). The phone layout's own bars use 44-point targets; panels and dialogs inside it keep the desktop's sizes |
 | Printing | unchanged desktop code; expect no printers (Phase 3: PrintManager or "not available") |
@@ -458,6 +458,8 @@ or accepting it. Nothing else has been measured yet; that needs a device.
 
 ## Revision history
 
+- 2026-10-21: First device run recorded in devices.md: the phone layout, the safe area and the
+  system bars' colours confirmed on the owner's phone.
 - 2026-10-21: Phone layout (Phase 5, first pass) and Back (Phase 4): `compact.rs`, edge-to-edge
   drawing with the system insets as egui's safe area, status bar icons that follow the app's
   theme, dialogs capped to the screen's width. Fixed after the first device run: egui gives the
