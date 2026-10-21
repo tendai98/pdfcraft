@@ -32,6 +32,7 @@ mod image_pick;
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
+pub mod compact;
 pub mod docking;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod camera_ui;
@@ -548,6 +549,10 @@ pub struct PdfCraftApp {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,
     pub palette_open: bool,
+    /// Which layout to use (`ui-layout` option); `Auto` is the phone layout on a phone.
+    pub layout_preference: compact::LayoutPreference,
+    /// Whether this frame uses the phone layout ([`compact`]).
+    pub compact: bool,
     pub palette_query: String,
     pub all_tools_expanded: bool,
     pub recent: Vec<RecentFile>,
@@ -907,6 +912,8 @@ impl PdfCraftApp {
             printer_source: None,
             print_tasks: print_ui::PrintTasks::default(),
             palette_open: false,
+            layout_preference: compact::LayoutPreference::default(),
+            compact: false,
             palette_query: String::new(),
             all_tools_expanded: false,
             recent: Vec::new(),
@@ -2387,6 +2394,9 @@ impl PdfCraftApp {
             }
             ("left", _) => self.left_open = value != "closed",
             ("home", _) => self.active = None,
+            ("ui-layout", _) => {
+                self.layout_preference = compact::LayoutPreference::parse(value).ok_or("ui-layout must be auto, desktop or compact")?;
+            }
             ("dialog", _) => {
                 self.dialog = match value {
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
@@ -2927,6 +2937,22 @@ impl eframe::App for PdfCraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // egui hands the app the whole screen, under a phone's status bar, navigation buttons
+        // and notch too. The shell keeps to the part they leave free (the safe area, which is the
+        // whole window on a desktop).
+        let safe = ui.ctx().content_rect();
+        let full = ui.max_rect();
+        if safe.is_positive() && ((full.min - safe.min).length() > 0.5 || (full.max - safe.max).length() > 0.5) {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(safe), |ui| self.shell_ui(ui));
+        } else {
+            self.shell_ui(ui);
+        }
+    }
+}
+
+impl PdfCraftApp {
+    /// One frame of the shell, laid out in `ui` (the safe area; see `ui`).
+    fn shell_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
@@ -2961,6 +2987,24 @@ impl eframe::App for PdfCraftApp {
             );
             dialogs::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
+            self.show_progress(&ctx);
+            widgets::toast(self, &ctx);
+            self.finish_render_frame(&ctx);
+            return;
+        }
+        let compact = compact::wanted(self.layout_preference, ctx.content_rect().size(), compact::TOUCH_PLATFORM);
+        if compact && !self.compact {
+            compact::entered(self);
+        }
+        self.compact = compact;
+        for view in &mut self.views {
+            view.side = canvas::gutter(compact);
+        }
+        if compact {
+            compact::show(self, ui);
+            self.process_pending_edits();
+            palette::show(self, &ctx);
+            dialogs::show(self, &ctx);
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
             self.finish_render_frame(&ctx);
@@ -3005,9 +3049,7 @@ impl eframe::App for PdfCraftApp {
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);
     }
-}
 
-impl PdfCraftApp {
     fn finish_render_frame(&mut self, ctx: &egui::Context) {
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);

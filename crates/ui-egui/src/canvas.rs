@@ -21,6 +21,20 @@ const GAP: f32 = 14.0;
 const MARGIN: f32 = 28.0;
 /// Horizontal gutter that keeps pages clear of the floating quick-action bar.
 const SIDE: f32 = 70.0;
+/// The gutter in the phone layout, where the quick-action bar floats at the bottom instead.
+const COMPACT_SIDE: f32 = 8.0;
+
+/// The gutter beside the pages in the phone layout or the desktop one.
+pub(crate) fn gutter(compact: bool) -> f32 {
+    if compact { COMPACT_SIDE } else { SIDE }
+}
+
+impl DocView {
+    /// Whether this view is laid out for the phone layout (the shell sets its gutter each frame).
+    fn compact(&self) -> bool {
+        self.side < SIDE
+    }
+}
 const THUMB_TAG: u64 = 1 << 63;
 const TEXT_TAG: u64 = 1 << 62;
 /// A page rendered for the organize grid at the size it is drawn there.
@@ -363,6 +377,8 @@ pub struct DocView {
     last_press_pos: Option<Pos2>,
     last_queue: Vec<RenderRequest>,
     viewport_w: f32,
+    /// Horizontal gutter either side of the pages: [`SIDE`], or [`COMPACT_SIDE`] on a phone.
+    pub(crate) side: f32,
     viewport_h: f32,
     page_count: usize,
     /// Page heights in points (view space), for mapping text positions to scroll offsets.
@@ -622,6 +638,7 @@ impl DocView {
             last_press_pos: None,
             last_queue: Vec::new(),
             viewport_w: 800.0,
+            side: SIDE,
             viewport_h: 600.0,
             page_count: info.pages.len(),
             page_heights: info.pages.iter().map(|p| p.height).collect(),
@@ -730,6 +747,7 @@ impl DocView {
         fresh.pages = std::mem::take(&mut self.pages);
         fresh.thumbs = std::mem::take(&mut self.thumbs);
         fresh.viewport_w = self.viewport_w;
+        fresh.side = self.side;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
         *self = fresh;
@@ -1038,7 +1056,7 @@ impl DocView {
         let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
         // The window's top-left as far as pages go: its left edge is the gutter that keeps them
         // clear of the floating quick-action bar, so `left` 0 shows the page's edge beside it.
-        let corner = vec2(SIDE, 0.0);
+        let corner = vec2(self.side, 0.0);
         let (fx, fy, rel) = match dest {
             DestView::Top => return,
             DestView::Xyz { left, top, zoom } => {
@@ -1675,7 +1693,7 @@ impl DocView {
         } else {
             (max_w, largest(|s| s.1))
         };
-        let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
+        let avail_w = (self.viewport_w - 2.0 * self.side).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
             Fit::Width => self.zoom = (avail_w - GAP * (per_row - 1.0)) / (w * PT * per_row),
@@ -1697,7 +1715,7 @@ impl DocView {
         let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
         let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-        (max_w * self.zoom * PT * per_row + 2.0 * SIDE).max(avail_w)
+        (max_w * self.zoom * PT * per_row + 2.0 * self.side).max(avail_w)
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
@@ -1710,7 +1728,7 @@ impl DocView {
                 for p in &info.pages {
                     let (w, h) = self.display_size(p);
                     let size = vec2(w * s, h * s);
-                    rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(SIDE), y), size));
+                    rects.push(Rect::from_min_size(pos2(((content_w - size.x) / 2.0).max(self.side), y), size));
                     y += size.y + GAP;
                 }
             }
@@ -1725,7 +1743,8 @@ impl DocView {
                     let sizes: Vec<Vec2> = pair.iter().map(|p| self.display_size(p)).map(|(w, h)| vec2(w * s, h * s)).collect();
                     let row_w: f32 = sizes.iter().map(|v| v.x).sum::<f32>() + GAP * (sizes.len() as f32 - 1.0);
                     let row_h = sizes.iter().map(|v| v.y).fold(0.0, f32::max);
-                    let mut x = if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(SIDE) } else { ((content_w - row_w) / 2.0).max(SIDE) };
+                    let mut x =
+                        if self.cover && ri == 0 { (content_w / 2.0 + GAP / 2.0).max(self.side) } else { ((content_w - row_w) / 2.0).max(self.side) };
                     for size in sizes {
                         rects.push(Rect::from_min_size(pos2(x, y + (row_h - size.y) / 2.0), size));
                         x += size.x + GAP;
@@ -3887,11 +3906,16 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
     });
 }
 
-/// The floating quick-action bar at the left edge of the document area.
+/// The floating quick-action bar at the left edge of the document area, or across the bottom of
+/// it in the phone layout, where the pages take the full width.
 fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let pos = area.left_top() + vec2(14.0, 14.0);
-    egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+    let across = app.compact;
+    let (pos, pivot) =
+        if across { (area.center_bottom() - vec2(0.0, 12.0), Align2::CENTER_BOTTOM) } else { (area.left_top() + vec2(14.0, 14.0), Align2::LEFT_TOP) };
+    // Flyouts open beside a vertical bar, and above one along the bottom.
+    let flyout = if across { egui::RectAlign::TOP_START } else { egui::RectAlign::RIGHT_START };
+    egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.border))
@@ -3899,8 +3923,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
             .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark() { 100 } else { 28 }) })
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                let direction = if across { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::top_down(egui::Align::Min) };
+                ui.with_layout(direction, |ui| {
                     if icons::button(ui, "mouse-pointer-2", 32.0, app.quick_tool == QuickTool::Select, tl!("Select (V)")).clicked() {
                         app.quick_tool = QuickTool::Select;
                     }
@@ -3921,80 +3946,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         if resp.clicked() && !active {
                             app.execute(current.command());
                         }
-                        egui::Popup::menu(&resp)
-                            .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
-                            .align(egui::RectAlign::RIGHT_START)
-                            .gap(6.0)
-                            .show(|ui| {
-                                for tool in comments::GROUPS[g] {
-                                    let on = app.quick_tool == QuickTool::Comment(*tool);
-                                    let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
-                                    let press = theme::Press::track(ui, &click);
-                                    press.wash(ui, row, 4, on);
-                                    let body = row.translate(press.offset());
-                                    icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
-                                    let reserve = if on { 28.0 } else { 8.0 };
-                                    crate::widgets::paint_left(
-                                        ui,
-                                        body.left_center() + vec2(34.0, 0.0),
-                                        tl!(tool.label()),
-                                        theme::regular(13.0),
-                                        t.text,
-                                        (row.width() - 34.0 - reserve).max(0.0),
-                                    );
-                                    if on {
-                                        icons::paint(
-                                            ui,
-                                            Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)),
-                                            "check",
-                                            14.0,
-                                            t.accent,
-                                        );
-                                    }
-                                    let click = theme::hand(click);
-                                    let info = tl!(tool.label()).to_string();
-                                    click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
-                                    if click.clicked() {
-                                        app.execute(tool.command());
-                                        ui.close();
-                                    }
-                                }
-                            });
-                    }
-                    // Fill & Sign ▸ (text, marks, date, signature).
-                    let current_fill = match app.quick_tool {
-                        QuickTool::Fill(f) => Some(f),
-                        _ => None,
-                    };
-                    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
-                    let resp = icons::button(
-                        ui,
-                        if current_fill.is_some() { shown.icon() } else { "pen-line" },
-                        32.0,
-                        current_fill.is_some(),
-                        tl!("Fill & Sign"),
-                    );
-                    let r = resp.rect;
-                    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        tri.to_vec(),
-                        if current_fill.is_some() { t.accent } else { t.text_faint },
-                        Stroke::NONE,
-                    ));
-                    if resp.clicked() && current_fill.is_none() {
-                        app.execute(shown.command());
-                    }
-                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
-                    egui::Popup::menu(&resp)
-                        .open_memory(open.then_some(egui::SetOpenCommand::Toggle))
-                        .align(egui::RectAlign::RIGHT_START)
-                        .gap(6.0)
-                        .show(|ui| {
-                            for tool in crate::fill_sign::FILL_TOOLS {
-                                if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
-                                    continue;
-                                }
-                                let on = current_fill == Some(tool);
+                        egui::Popup::menu(&resp).open_memory(open.then_some(egui::SetOpenCommand::Toggle)).align(flyout).gap(6.0).show(|ui| {
+                            for tool in comments::GROUPS[g] {
+                                let on = app.quick_tool == QuickTool::Comment(*tool);
                                 let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
                                 let press = theme::Press::track(ui, &click);
                                 press.wash(ui, row, 4, on);
@@ -4026,12 +3980,69 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                     ui.close();
                                 }
                             }
-                            ui.separator();
-                            if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
-                                app.execute(command);
+                        });
+                    }
+                    // Fill & Sign ▸ (text, marks, date, signature).
+                    let current_fill = match app.quick_tool {
+                        QuickTool::Fill(f) => Some(f),
+                        _ => None,
+                    };
+                    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
+                    let resp = icons::button(
+                        ui,
+                        if current_fill.is_some() { shown.icon() } else { "pen-line" },
+                        32.0,
+                        current_fill.is_some(),
+                        tl!("Fill & Sign"),
+                    );
+                    let r = resp.rect;
+                    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        tri.to_vec(),
+                        if current_fill.is_some() { t.accent } else { t.text_faint },
+                        Stroke::NONE,
+                    ));
+                    if resp.clicked() && current_fill.is_none() {
+                        app.execute(shown.command());
+                    }
+                    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
+                    egui::Popup::menu(&resp).open_memory(open.then_some(egui::SetOpenCommand::Toggle)).align(flyout).gap(6.0).show(|ui| {
+                        for tool in crate::fill_sign::FILL_TOOLS {
+                            if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
+                                continue;
+                            }
+                            let on = current_fill == Some(tool);
+                            let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+                            let press = theme::Press::track(ui, &click);
+                            press.wash(ui, row, 4, on);
+                            let body = row.translate(press.offset());
+                            icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
+                            let reserve = if on { 28.0 } else { 8.0 };
+                            crate::widgets::paint_left(
+                                ui,
+                                body.left_center() + vec2(34.0, 0.0),
+                                tl!(tool.label()),
+                                theme::regular(13.0),
+                                t.text,
+                                (row.width() - 34.0 - reserve).max(0.0),
+                            );
+                            if on {
+                                icons::paint(ui, Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)), "check", 14.0, t.accent);
+                            }
+                            let click = theme::hand(click);
+                            let info = tl!(tool.label()).to_string();
+                            click.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, info.clone()));
+                            if click.clicked() {
+                                app.execute(tool.command());
                                 ui.close();
                             }
-                        });
+                        }
+                        ui.separator();
+                        if let Some(command) = crate::fill_sign::signature_entries(ui, app, &t) {
+                            app.execute(command);
+                            ui.close();
+                        }
+                    });
                     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
                         ui.label(tl!("Font size:"));
                         ui.add(
@@ -4072,6 +4083,9 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
 }
 
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
+/// The organize toolbar's natural width; narrower phone screens scroll it.
+const ORGANIZE_ROW_MIN_WIDTH: f32 = 860.0;
+
 fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 4)).show(ui, |ui| {
         let pages = ui.add_enabled_ui(unobstructed, |ui| view.organize_range.show(ui, &view.selected, info.pages.len())).inner;
@@ -4083,107 +4097,113 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
     egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let label = match view.selected.len() {
-                0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.current + 1).to_string()), ("n", &n.to_string())]),
-                1 => tl!("1 page selected").to_string(),
-                k => crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &k.to_string())]),
-            };
-            // Fixed width so the buttons never shift as the selection text changes.
-            ui.add_sized([150.0, 30.0], egui::Label::new(egui::RichText::new(label).font(theme::medium(13.0)).color(t.text_muted)).truncate());
-            ui.add_enabled_ui(editable, |ui| {
-                if icons::button(ui, "rotate-ccw", 30.0, false, tl!("Rotate counterclockwise")).clicked() {
-                    view.pending_edit = Some(Edit::RotatePages { pages: targets.clone(), degrees: -90 });
-                }
-                if icons::button(ui, "rotate-cw", 30.0, false, tl!("Rotate clockwise")).clicked() {
-                    view.pending_edit = Some(Edit::RotatePages { pages: targets.clone(), degrees: 90 });
-                }
-                let can_delete = targets.len() < n;
-                if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash-2", 30.0, false, tl!("Delete pages (Delete)"))).inner.clicked() {
-                    view.pending_edit = Some(Edit::DeletePages { pages: targets.clone() });
-                }
-                if icons::button(ui, "file-plus", 30.0, false, tl!("Insert a blank page after the selection")).clicked() {
-                    let c = info.pages[last].crop;
-                    let (w, h) = ((c[2] - c[0]).abs().max(1.0) as f64, (c[3] - c[1]).abs().max(1.0) as f64);
-                    view.pending_edit = Some(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
-                }
-                if icons::button(ui, "file-input", 30.0, false, tl!("Insert pages from a file…")).clicked() {
-                    view.pending_action = Some(ViewAction::InsertFromFile);
-                }
-                if icons::button(ui, "replace", 30.0, false, tl!("Replace pages…")).clicked() {
-                    view.pending_action = Some(ViewAction::ReplacePages);
-                }
-                if icons::button(ui, "file-output", 30.0, false, tl!("Extract pages to a new document")).clicked() {
-                    view.pending_action = Some(ViewAction::Extract);
-                }
-                if icons::button(ui, "scissors", 30.0, false, tl!("Split into files…")).clicked() {
-                    view.pending_action = Some(ViewAction::Split);
-                }
-                // Select ▸ all, odd, even, landscape, portrait pages (Acrobat's page range
-                // selection in Organize Pages).
-                let sel = icons::button(ui, "list", 30.0, false, tl!("Select pages"));
-                egui::Popup::menu(&sel).show(|ui| {
-                    use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
-                    let all: Vec<usize> = (0..n).collect();
-                    for (label, parity, orient) in [
-                        ("All pages", P::Both, O::Both),
-                        ("Odd pages", P::Odd, O::Both),
-                        ("Even pages", P::Even, O::Both),
-                        ("Landscape pages", P::Both, O::Landscape),
-                        ("Portrait pages", P::Both, O::Portrait),
-                    ] {
-                        if ui.button(tl!(label)).clicked() {
-                            view.select_pages(&filter_pages(info, &all, parity, orient));
+        // On a phone the row scrolls sideways rather than overlapping its buttons; the desktop
+        // keeps every button in the window.
+        let row_width = if view.compact() { ui.available_width().max(ORGANIZE_ROW_MIN_WIDTH) } else { ui.available_width() };
+        egui::ScrollArea::horizontal().id_salt("organize_toolbar").auto_shrink([false, true]).show(ui, |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(row_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let label = match view.selected.len() {
+                    0 => crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(view.current + 1).to_string()), ("n", &n.to_string())]),
+                    1 => tl!("1 page selected").to_string(),
+                    k => crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &k.to_string())]),
+                };
+                // Fixed width so the buttons never shift as the selection text changes.
+                ui.add_sized([150.0, 30.0], egui::Label::new(egui::RichText::new(label).font(theme::medium(13.0)).color(t.text_muted)).truncate());
+                ui.add_enabled_ui(editable, |ui| {
+                    if icons::button(ui, "rotate-ccw", 30.0, false, tl!("Rotate counterclockwise")).clicked() {
+                        view.pending_edit = Some(Edit::RotatePages { pages: targets.clone(), degrees: -90 });
+                    }
+                    if icons::button(ui, "rotate-cw", 30.0, false, tl!("Rotate clockwise")).clicked() {
+                        view.pending_edit = Some(Edit::RotatePages { pages: targets.clone(), degrees: 90 });
+                    }
+                    let can_delete = targets.len() < n;
+                    if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash-2", 30.0, false, tl!("Delete pages (Delete)"))).inner.clicked() {
+                        view.pending_edit = Some(Edit::DeletePages { pages: targets.clone() });
+                    }
+                    if icons::button(ui, "file-plus", 30.0, false, tl!("Insert a blank page after the selection")).clicked() {
+                        let c = info.pages[last].crop;
+                        let (w, h) = ((c[2] - c[0]).abs().max(1.0) as f64, (c[3] - c[1]).abs().max(1.0) as f64);
+                        view.pending_edit = Some(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
+                    }
+                    if icons::button(ui, "file-input", 30.0, false, tl!("Insert pages from a file…")).clicked() {
+                        view.pending_action = Some(ViewAction::InsertFromFile);
+                    }
+                    if icons::button(ui, "replace", 30.0, false, tl!("Replace pages…")).clicked() {
+                        view.pending_action = Some(ViewAction::ReplacePages);
+                    }
+                    if icons::button(ui, "file-output", 30.0, false, tl!("Extract pages to a new document")).clicked() {
+                        view.pending_action = Some(ViewAction::Extract);
+                    }
+                    if icons::button(ui, "scissors", 30.0, false, tl!("Split into files…")).clicked() {
+                        view.pending_action = Some(ViewAction::Split);
+                    }
+                    // Select ▸ all, odd, even, landscape, portrait pages (Acrobat's page range
+                    // selection in Organize Pages).
+                    let sel = icons::button(ui, "list", 30.0, false, tl!("Select pages"));
+                    egui::Popup::menu(&sel).show(|ui| {
+                        use pdfcraft_engine::{PageOrientation as O, PageParity as P, filter_pages};
+                        let all: Vec<usize> = (0..n).collect();
+                        for (label, parity, orient) in [
+                            ("All pages", P::Both, O::Both),
+                            ("Odd pages", P::Odd, O::Both),
+                            ("Even pages", P::Even, O::Both),
+                            ("Landscape pages", P::Both, O::Landscape),
+                            ("Portrait pages", P::Both, O::Portrait),
+                        ] {
+                            if ui.button(tl!(label)).clicked() {
+                                view.select_pages(&filter_pages(info, &all, parity, orient));
+                                ui.close();
+                            }
+                        }
+                        if ui.button(tl!("None")).clicked() {
+                            view.select_pages(&[]);
                             ui.close();
                         }
+                    });
+                    ui.add_space(8.0);
+                    if ui.add_enabled_ui(first > 0, |ui| icons::button(ui, "chevron-left", 30.0, false, tl!("Move earlier"))).inner.clicked() {
+                        view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first - 1 });
                     }
-                    if ui.button(tl!("None")).clicked() {
-                        view.select_pages(&[]);
-                        ui.close();
+                    if ui.add_enabled_ui(last + 1 < n, |ui| icons::button(ui, "chevron-right", 30.0, false, tl!("Move later"))).inner.clicked() {
+                        view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first + 1 });
                     }
                 });
-                ui.add_space(8.0);
-                if ui.add_enabled_ui(first > 0, |ui| icons::button(ui, "chevron-left", 30.0, false, tl!("Move earlier"))).inner.clicked() {
-                    view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first - 1 });
-                }
-                if ui.add_enabled_ui(last + 1 < n, |ui| icons::button(ui, "chevron-right", 30.0, false, tl!("Move later"))).inner.clicked() {
-                    view.pending_edit = Some(Edit::MovePages { pages: targets.clone(), to: first + 1 });
-                }
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
-                    view.organize = false;
-                }
-                // What the grid shows is what is saved.
-                let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
-                if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
-                    view.pending_action = Some(ViewAction::Save);
-                }
-                ui.add_space(8.0);
-                // Page size in the grid (right to left: in, the percentage, out).
-                let zoom = view.grid_zoom;
-                if ui
-                    .add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
-                }
-                let percent = egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
-                    .frame(false);
-                let percent = ui.add_sized([44.0, 30.0], percent);
-                percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
-                if percent.on_hover_text(tl!("Reset page size")).clicked() {
-                    view.grid_zoom_request = Some(1.0);
-                }
-                if ui
-                    .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
-                    .inner
-                    .clicked()
-                {
-                    view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::ghost_button(ui, "x", tl!("Close")).on_hover_text(tl!("Back to the document")).clicked() {
+                        view.organize = false;
+                    }
+                    // What the grid shows is what is saved.
+                    let save = ui.add_enabled_ui(dirty, |ui| widgets::pill_button(ui, tl!("Save pages"), true)).inner;
+                    if save.on_hover_text(tl!("Save these pages as one PDF")).on_disabled_hover_text(tl!("No changes to save")).clicked() {
+                        view.pending_action = Some(ViewAction::Save);
+                    }
+                    ui.add_space(8.0);
+                    // Page size in the grid (right to left: in, the percentage, out).
+                    let zoom = view.grid_zoom;
+                    if ui
+                        .add_enabled_ui(zoom < *GRID_ZOOM_RANGE.end(), |ui| icons::button(ui, "zoom-in", 30.0, false, tl!("Larger pages")))
+                        .inner
+                        .clicked()
+                    {
+                        view.grid_zoom_request = Some(zoom * GRID_ZOOM_STEP);
+                    }
+                    let percent =
+                        egui::Button::new(egui::RichText::new(format!("{:.0}%", zoom * 100.0)).font(theme::medium(12.0)).color(t.text_muted))
+                            .frame(false);
+                    let percent = ui.add_sized([44.0, 30.0], percent);
+                    percent.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Reset page size")));
+                    if percent.on_hover_text(tl!("Reset page size")).clicked() {
+                        view.grid_zoom_request = Some(1.0);
+                    }
+                    if ui
+                        .add_enabled_ui(zoom > *GRID_ZOOM_RANGE.start(), |ui| icons::button(ui, "zoom-out", 30.0, false, tl!("Smaller pages")))
+                        .inner
+                        .clicked()
+                    {
+                        view.grid_zoom_request = Some(zoom / GRID_ZOOM_STEP);
+                    }
+                });
             });
         });
     });

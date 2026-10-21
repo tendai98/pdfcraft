@@ -1259,7 +1259,7 @@ pub(crate) fn cert_viewer(ui: &mut egui::Ui, v: &mut CertViewer, trusted: &[Cert
         });
         ui.add_space(16.0);
         ui.vertical(|ui| {
-            ui.set_width(440.0);
+            ui.set_width(crate::widgets::dialog_width(ui, 440.0));
             let Some(c) = v.chain.get(v.selected).cloned() else { return };
             ui.horizontal(|ui| {
                 for (tab, label) in [(CertTab::Summary, tl!("Summary")), (CertTab::Details, tl!("Details")), (CertTab::Trust, tl!("Trust"))] {

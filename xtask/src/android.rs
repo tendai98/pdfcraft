@@ -100,6 +100,18 @@ pub fn run(args: &[String]) -> Result<()> {
     if release {
         tasks.extend(["assembleRelease", "bundleRelease"]);
     }
+    // Gradle packages debug APKs incrementally into the previous file, leaving the replaced native
+    // library behind as dead space (a 50 MB APK grew to 100 MB); a fresh file each build avoids it.
+    let outputs = root.join("android/app/build/outputs");
+    for old in
+        [outputs.join("apk/debug/app-debug.apk"), outputs.join("apk/release/app-release.apk"), outputs.join("apk/release/app-release-unsigned.apk")]
+    {
+        if let Err(e) = std::fs::remove_file(&old)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            bail!("couldn't remove the previous {}: {e}", old.display());
+        }
+    }
     println!("android: gradle {}", tasks.join(" "));
     let status = Command::new(&gradle)
         .current_dir(root.join("android"))
@@ -111,7 +123,6 @@ pub fn run(args: &[String]) -> Result<()> {
     if !status.success() {
         bail!("gradle failed");
     }
-    let outputs = root.join("android/app/build/outputs");
     for apk in [
         outputs.join("apk/debug/app-debug.apk"),
         outputs.join("apk/release/app-release.apk"),

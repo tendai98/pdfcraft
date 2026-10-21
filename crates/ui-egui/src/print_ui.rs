@@ -648,7 +648,7 @@ pub(crate) fn body(
     labels: &[String],
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
-    ui.set_width(820.0);
+    ui.set_width(crate::widgets::dialog_width(ui, 820.0));
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
@@ -657,7 +657,7 @@ pub(crate) fn body(
     ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
-            ui.set_width(470.0);
+            ui.set_width(crate::widgets::dialog_width(ui, 470.0));
             egui::Grid::new("print-top").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                 ui.label(tl!("Printer:"));
                 let before = d.printer.clone();

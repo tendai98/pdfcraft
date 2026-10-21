@@ -35,6 +35,8 @@ pub struct AndroidHost {
     /// `after_pick` (Save As goes through both).
     published: Mutex<HashMap<PathBuf, Stamp>>,
     dark: AtomicBool,
+    /// Pixels the system bars, cutout and keyboard cover: left, top, right, bottom.
+    insets: Mutex<[u32; 4]>,
     /// Messages for the user from calls that can't show one themselves.
     notices: Mutex<Vec<String>>,
 }
@@ -54,6 +56,7 @@ impl AndroidHost {
             pending: Mutex::default(),
             published: Mutex::default(),
             dark: AtomicBool::new(dark),
+            insets: Mutex::default(),
             notices: Mutex::default(),
         }
     }
@@ -61,6 +64,26 @@ impl AndroidHost {
     /// Whether the system is in dark mode, as last reported.
     pub fn dark(&self) -> bool {
         self.dark.load(Ordering::Relaxed)
+    }
+
+    /// What the system covers at each edge, in pixels: left, top, right, bottom.
+    pub fn insets(&self) -> [u32; 4] {
+        *self.insets.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Dark status and navigation bar icons (for a light app), or light ones.
+    pub fn set_light_bars(&self, light: bool) {
+        if let Err(e) = bridge::set_light_bars(&self.app, light) {
+            log::warn!("couldn't set the system bars' colours: {e}");
+        }
+    }
+
+    /// Put the app in the background, as Back does at an app's first screen (it keeps running, so
+    /// nothing unsaved is lost).
+    pub fn move_to_back(&self) {
+        if let Err(e) = bridge::move_to_back(&self.app) {
+            log::warn!("couldn't move to the background: {e}");
+        }
     }
 
     fn notice(&self, message: impl Into<String>) {
@@ -92,6 +115,13 @@ impl AndroidHost {
                 Some(Event::Theme { dark }) => self.dark.store(dark, Ordering::Relaxed),
                 // Dropping rendered pages on memory pressure is Phase 3 (`trim_caches`).
                 Some(Event::Trim { level }) => log::info!("onTrimMemory({level})"),
+                Some(Event::Insets(sides)) => {
+                    let mut insets = self.insets.lock().unwrap_or_else(PoisonError::into_inner);
+                    if *insets != sides {
+                        log::info!("insets (px, left top right bottom): {sides:?}");
+                        *insets = sides;
+                    }
+                }
                 Some(Event::Notice(m)) => out.push(ForShell::Notice(m)),
                 None => log::warn!("ignored a malformed event from the activity"),
             }

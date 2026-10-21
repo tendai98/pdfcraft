@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use android_activity::AndroidApp;
-use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore};
+use pdfcraft_ui_egui::{PdfCraftApp, RecoveryStore, compact};
 
 use crate::host::{AndroidHost, ForShell};
 
@@ -23,6 +23,8 @@ pub(crate) struct Shell {
     host: Arc<AndroidHost>,
     android: AndroidApp,
     keyboard_shown: bool,
+    /// Whether the system bars were last set for a light app (`None`: not yet).
+    light_bars: Option<bool>,
 }
 
 impl Shell {
@@ -43,13 +45,36 @@ impl Shell {
         } else {
             log::info!("renderer: OpenGL (glow)");
         }
-        Shell { app, host, android, keyboard_shown: false }
+        Shell { app, host, android, keyboard_shown: false, light_bars: None }
     }
 }
 
 impl eframe::App for Shell {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.system_theme = Some(if self.host.dark() { egui::Theme::Dark } else { egui::Theme::Light });
+        // The window is drawn edge to edge: keep the shell out from under the status bar, the
+        // navigation bar, a display cutout and the soft keyboard.
+        raw.safe_area_insets = Some(safe_area(self.host.insets(), ctx.pixels_per_point()));
+        // The Back button arrives as BrowserBack (winit); it is the shell's to interpret.
+        let back = raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::BrowserBack, pressed: true, .. }));
+        raw.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::BrowserBack, .. }));
+        if back {
+            match compact::back(&mut self.app, ctx) {
+                compact::Back::Escape => {
+                    for pressed in [true, false] {
+                        raw.events.push(egui::Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+                compact::Back::Done => ctx.request_repaint(),
+                compact::Back::Leave => self.host.move_to_back(),
+            }
+        }
         self.app.raw_input_hook(ctx, raw);
     }
 
@@ -90,10 +115,23 @@ impl eframe::App for Shell {
         for text in copied {
             self.host.set_clipboard_text(&text);
         }
+        // Status bar icons that show against the app's own theme, which may not be the system's.
+        let light = !ui.style().visuals.dark_mode;
+        if self.light_bars != Some(light) {
+            self.host.set_light_bars(light);
+            self.light_bars = Some(light);
+        }
     }
 
     /// Android stops a backgrounded app without asking: keep settings at most this old.
     fn auto_save_interval(&self) -> Duration {
         Duration::from_secs(10)
     }
+}
+
+/// Insets in pixels (left, top, right, bottom) as egui's safe area, in points.
+fn safe_area(px: [u32; 4], pixels_per_point: f32) -> egui::SafeAreaInsets {
+    let ppp = if pixels_per_point.is_finite() && pixels_per_point > 0.0 { pixels_per_point } else { 1.0 };
+    let [left, top, right, bottom] = px.map(|v| v as f32 / ppp);
+    egui::SafeAreaInsets(egui::epaint::MarginF32 { left, top, right, bottom })
 }

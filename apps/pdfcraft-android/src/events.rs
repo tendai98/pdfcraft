@@ -6,6 +6,8 @@
 //! - `open\t<path>`: a document opened from another app (ACTION_VIEW / ACTION_SEND), staged.
 //! - `theme\t<0|1>`: the system switched to light (0) or dark (1).
 //! - `trim\t<level>`: the system asked for memory back (`onTrimMemory`).
+//! - `insets\t<left>\t<top>\t<right>\t<bottom>`: what the system bars, display cutout and soft
+//!   keyboard cover at each edge of the window, in pixels.
 //! - `error\t<message>`: something to tell the user.
 //!
 //! Everything here comes from another process's file names and is untrusted: malformed lines are
@@ -17,13 +19,24 @@ use std::path::PathBuf;
 const MAX_PATHS: usize = 1000;
 /// Longer messages are cut.
 const MAX_MESSAGE_CHARS: usize = 500;
+/// An inset larger than this many pixels is not believed (no screen is that tall).
+const MAX_INSET: u32 = 20_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Picked { id: u64, paths: Vec<PathBuf> },
+    Picked {
+        id: u64,
+        paths: Vec<PathBuf>,
+    },
     Open(PathBuf),
-    Theme { dark: bool },
-    Trim { level: i32 },
+    Theme {
+        dark: bool,
+    },
+    Trim {
+        level: i32,
+    },
+    /// Pixels covered at the left, top, right and bottom edges.
+    Insets([u32; 4]),
     Notice(String),
 }
 
@@ -44,6 +57,14 @@ pub fn parse(line: &str) -> Option<Event> {
             _ => None,
         },
         "trim" => rest.parse().ok().map(|level| Event::Trim { level }),
+        "insets" => {
+            let mut sides = [0u32; 4];
+            let mut fields = rest.split('\t');
+            for side in &mut sides {
+                *side = fields.next()?.parse().ok().filter(|v| *v <= MAX_INSET)?;
+            }
+            fields.next().is_none().then_some(Event::Insets(sides))
+        }
         "error" => Some(Event::Notice(rest.chars().take(MAX_MESSAGE_CHARS).collect())),
         _ => None,
     }
@@ -130,6 +151,11 @@ mod tests {
         assert_eq!(parse("theme\t2"), None);
         assert_eq!(parse("trim\t80"), Some(Event::Trim { level: 80 }));
         assert_eq!(parse("trim\tlots"), None);
+        assert_eq!(parse("insets\t0\t63\t0\t126"), Some(Event::Insets([0, 63, 0, 126])));
+        assert_eq!(parse("insets\t0\t63\t0"), None, "four sides");
+        assert_eq!(parse("insets\t0\t63\t0\t1\t2"), None, "four sides only");
+        assert_eq!(parse("insets\t0\t-1\t0\t0"), None);
+        assert_eq!(parse(&format!("insets\t0\t{}\t0\t0", MAX_INSET + 1)), None);
         assert_eq!(parse("error\tNo app"), Some(Event::Notice("No app".into())));
         assert_eq!(parse("error\t").map(|_| ()), Some(()));
         assert_eq!(parse(&format!("error\t{}", "é".repeat(MAX_MESSAGE_CHARS * 2))), Some(Event::Notice("é".repeat(MAX_MESSAGE_CHARS))));

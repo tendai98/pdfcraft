@@ -1,6 +1,7 @@
 # PdfCraft for Android
 
-Status: Phases 0–2 of the porting specification done (2026-10-16). `cargo xtask android`
+Status: Phases 0–2 of the porting specification done (2026-10-16); a first phone layout and the
+Back button (parts of Phases 4–5) added 2026-10-21. `cargo xtask android`
 builds an installable debug APK for arm64-v8a (x86_64 also supported, not yet built). **Not yet run
 on a device or emulator**: the build machine has neither (no `/dev/kvm`, no device attached), so
 every on-device behaviour described here is designed and compiled but unverified. The
@@ -333,13 +334,49 @@ There's no screen-reader support yet.
 | Save, Save As, exports | implemented ([above](#files-and-the-storage-access-framework)) |
 | Comments, forms, signing, redaction, OCR… | the shell's own code; not checked on Android, and OCR speed unmeasured |
 | Dark mode, clipboard text, soft keyboard | implemented |
-| Back button | **not yet** (Phase 4); it may close the activity directly |
-| Pinch zoom, 44 dp touch targets, long-press menus, tablet/phone layouts | **not yet** (Phases 4–5) |
+| Phone layout ([below](#phone-layout)) | implemented (2026-10-21), checked in phone-sized headless renders; on a device: first APK built, not yet reported back |
+| Back button | closes the top dialog, menu or sheet, then goes from a document to Home, then puts the app in the background ([below](#phone-layout)) |
+| Edge to edge: status bar, navigation bar, cutout, soft keyboard | the shell keeps clear of them through egui's safe area (`insets` events); unverified on a device |
+| Pinch zoom | egui's multi-touch zoom feeds the page view's existing zoom; unverified on a device |
+| 44 dp touch targets everywhere, long-press menus, tablet layout | **not yet** (Phase 4). The phone layout's own bars use 44-point targets; panels and dialogs inside it keep the desktop's sizes |
 | Printing | unchanged desktop code; expect no printers (Phase 3: PrintManager or "not available") |
 | Folder pickers that read (Add folder, Pin folder) | says "not available on Android yet" |
 | Copy image/files to the clipboard | says "not available on Android yet" |
 | Automation, MCP, `--control` | not compiled in (owner decision) |
 | Screen readers | not yet (above) |
+
+## Phone layout
+
+Screens whose shorter side is under 600 points (Android's phone/tablet line, so a phone stays in
+it when turned) get the compact layout in `crates/ui-egui/src/compact.rs`. Tablets keep the
+desktop layout for now. Only the chrome changes; the page, Home, the panels' contents and the
+dialogs are the shell's own:
+
+| Desktop | Phone |
+|---|---|
+| Tab strip | Top bar: Home, the open documents as one menu (switch, close), Find, Open, ⋮ |
+| Mode bar (Menu, modes, Save/Print/Properties) | Bottom bar with the five modes; ⋮ holds Save, Properties, Print and the main menu |
+| Docked tools panel and inspector | One sheet over the lower part of the page, dragged taller or shorter, ✕ closes it. Tapping the current mode again shows or hides its tools |
+| Right rail (panels, page, zoom) | Page bar above the modes: page ↑↓, page number, zoom, fit, side panels |
+| Quick-action bar at the left edge, 70 pt gutters | Quick-action bar floating along the bottom, 8 pt gutters; pages fit the width the first time a document is shown |
+
+Also: dialogs are capped to the screen's width (`widgets::dialog_width`), the Organize toolbar
+scrolls sideways, Home shows its tools two to a row, and the ArtCraft community card is not in
+the Android build (a fork must remove the brand).
+
+Back (`compact::back`, called by `shell.rs` for the `BrowserBack` key winit reports): a dialog,
+prompt, menu, the palette or full screen gets Escape, so each cancels the way it already does on
+Escape; otherwise the sheet closes; otherwise a document goes Home (it stays open); at Home the
+activity's `moveToBack` puts the app in the background, so nothing unsaved is lost.
+
+To look at it without a device, render the shell headlessly at a phone's size:
+
+```sh
+cargo run -p pdfcraft-ui-egui --example shot -- out.png file.pdf --size 392x850 --scale 2 --ui-layout compact
+```
+
+`ui-layout` (`auto`, `desktop`, `compact`) is a shell option like `theme`; `auto` is compact only
+on Android. Tests: `crates/ui-egui/tests/compact.rs`.
 
 ## Device checklist
 
@@ -367,6 +404,7 @@ build machine). Record the device, Android version and renderer in [devices.md](
 | Symptom | Likely cause and fix |
 |---|---|
 | Black screen, or a crash right after launch, logcat mentions wgpu, Vulkan or the surface | The GPU driver; switch to OpenGL with `filesDir/renderer` (above) and report the device in devices.md. |
+| The app draws under the status bar or the navigation buttons | `adb logcat -s pdfcraft \| grep insets` should show what the activity reported (pixels: left, top, right, bottom). None: the activity's insets listener didn't run. Present: the shell isn't laying out inside egui's safe area (`PdfCraftApp::ui`). |
 | `java.lang.UnsatisfiedLinkError` in logcat | The `.so` is missing for that ABI: build that ABI (`--abi x86_64` for the emulator). |
 | `NoSuchMethodError` from `bridge.rs` | A Kotlin method was renamed or R8 removed it; check `proguard-rules.pro`. |
 | "This document can't be saved back to where it came from" | The source gave no write access; use Save As. |
@@ -419,6 +457,12 @@ Options: `opt-level = "s"` for crates off the render path, OCR models and boa be
 or accepting it. Nothing else has been measured yet; that needs a device.
 
 ## Revision history
+
+- 2026-10-21: Phone layout (Phase 5, first pass) and Back (Phase 4): `compact.rs`, edge-to-edge
+  drawing with the system insets as egui's safe area, status bar icons that follow the app's
+  theme, dialogs capped to the screen's width. Fixed after the first device run: egui gives the
+  app the whole screen, so the shell now lays itself out inside the safe area itself (it had
+  drawn under the status bar and the navigation buttons).
 
 - 2026-10-16: Troubleshooting: UI-test segfaults from a broken Vulkan driver install. The commit
   before this one (213b837) blamed `vello_cpu`; that came from reading the wrong thread's

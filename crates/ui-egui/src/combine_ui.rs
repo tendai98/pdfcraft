@@ -922,7 +922,7 @@ fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
     }
     let mut choice: Option<bool> = None;
     let modal = egui::Modal::new(egui::Id::new("combine-skip")).show(ctx, |ui| {
-        ui.set_width(460.0);
+        ui.set_width(crate::widgets::dialog_width(ui, 460.0));
         ui.horizontal(|ui| {
             ui.add(icons::image("triangle-alert", 22.0, ERROR));
             ui.add(egui::Label::new(egui::RichText::new(tl!("Leave out files that can't be read?")).font(theme::semibold(16.0))).wrap());

@@ -96,6 +96,22 @@ pub(crate) fn set_clipboard_text(app: &AndroidApp, text: &str) -> Result<(), Str
     })
 }
 
+/// Dark system bar icons over a light app (`light`), or light icons over a dark one.
+pub(crate) fn set_light_bars(app: &AndroidApp, light: bool) -> Result<(), String> {
+    with_activity(app, |env, activity| {
+        env.call_method(activity, jni_str!("setLightBars"), jni_sig!("(Z)V"), &[light.into()])?;
+        Ok(())
+    })
+}
+
+/// Send the app to the background (`moveTaskToBack`).
+pub(crate) fn move_to_back(app: &AndroidApp) -> Result<(), String> {
+    with_activity(app, |env, activity| {
+        env.call_method(activity, jni_str!("moveToBack"), jni_sig!("()V"), &[])?;
+        Ok(())
+    })
+}
+
 pub(crate) fn is_dark_mode(app: &AndroidApp) -> Result<bool, String> {
     with_activity(app, |env, activity| env.call_method(activity, jni_str!("isDarkMode"), jni_sig!("()Z"), &[])?.z())
 }

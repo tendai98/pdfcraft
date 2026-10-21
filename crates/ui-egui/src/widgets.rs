@@ -28,6 +28,13 @@ pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) ->
     egui::Modal::new(egui::Id::new(id)).frame(dialog_frame(ctx))
 }
 
+/// A dialog's width: `wanted` points, or less on a screen too narrow for it (a phone), so the
+/// dialog stays on screen with a margin either side.
+pub fn dialog_width(ui: &egui::Ui, wanted: f32) -> f32 {
+    let room = ui.ctx().content_rect().width() - 2.0 * (f32::from(DIALOG_PAD_X) + 8.0);
+    if room.is_finite() && room > 0.0 { wanted.min(room) } else { wanted }
+}
+
 /// Show [`modal`], outline its controls, and remember the card rect for layout checks.
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
     let stored = egui::Id::new(id);

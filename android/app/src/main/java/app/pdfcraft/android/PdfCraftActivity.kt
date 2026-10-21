@@ -6,11 +6,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.system.Os
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import java.io.File
 import java.io.InputStream
@@ -56,6 +62,7 @@ class PdfCraftActivity : NativeActivity() {
             events.add("error\tCouldn't set up the app folders: ${clean(e.message)}")
         }
         super.onCreate(savedInstanceState)
+        drawEdgeToEdge()
         // A fresh start: what an earlier run staged is no longer tied to any document.
         File(cacheDir, "saf").deleteRecursively()
         handleViewIntent(intent)
@@ -70,6 +77,12 @@ class PdfCraftActivity : NativeActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         events.add("theme\t${if (isDarkMode()) 1 else 0}")
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // The listener can run before the window is laid out; by focus the insets are final.
+        if (hasFocus) window.decorView.rootWindowInsets?.let { reportInsets(it) }
     }
 
     override fun onTrimMemory(level: Int) {
@@ -162,6 +175,28 @@ class PdfCraftActivity : NativeActivity() {
         }
     }
 
+    /** Dark status and navigation bar icons over a light app ([light]), light icons over a dark one. */
+    @Suppress("DEPRECATION")
+    fun setLightBars(light: Boolean) {
+        runOnUiThread {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                window.insetsController?.setSystemBarsAppearance(if (light) mask else 0, mask)
+            } else {
+                val flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                val decor = window.decorView
+                decor.systemUiVisibility =
+                    if (light) decor.systemUiVisibility or flags else decor.systemUiVisibility and flags.inv()
+            }
+        }
+    }
+
+    /** Back at the first screen: go to the background, keeping the app (and any unsaved work). */
+    fun moveToBack() {
+        runOnUiThread { moveTaskToBack(true) }
+    }
+
     fun isDarkMode(): Boolean =
         (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
@@ -174,6 +209,52 @@ class PdfCraftActivity : NativeActivity() {
                 events.add("error\tNo app can open this link")
             }
         }
+    }
+
+    // ---- Window ------------------------------------------------------------------------------
+
+    /**
+     * Draw behind the status and navigation bars on every version (Android 15 always does), and
+     * report what they, a display cutout and the soft keyboard cover as "insets" events, so the
+     * Rust side keeps its controls clear of them.
+     */
+    @Suppress("DEPRECATION")
+    private fun drawEdgeToEdge() {
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        window.decorView.setOnApplyWindowInsetsListener { view, insets ->
+            reportInsets(insets)
+            view.onApplyWindowInsets(insets)
+        }
+        window.decorView.requestApplyInsets()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun reportInsets(insets: WindowInsets) {
+        val sides = if (Build.VERSION.SDK_INT >= 30) {
+            val covered = insets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime()
+            )
+            intArrayOf(covered.left, covered.top, covered.right, covered.bottom)
+        } else {
+            intArrayOf(
+                insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
+                insets.systemWindowInsetRight, insets.systemWindowInsetBottom
+            )
+        }
+        events.add("insets\t" + sides.joinToString("\t") { maxOf(it, 0).toString() })
     }
 
     // ---- Picker plumbing ---------------------------------------------------------------------
